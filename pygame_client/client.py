@@ -6,7 +6,7 @@ import threading
 import time
 import pygame
 import websocket
-SERVER_URL = "ws://127.0.0.1:10000"
+SERVER_URL = "https://effective-parakeet-dgzj.onrender.com"
 PORT = 5000
 WINDOW_WIDTH = 1100
 WINDOW_HEIGHT = 680
