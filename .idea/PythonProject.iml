@@ -2,6 +2,8 @@
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/android_kivy_client/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/other_builds/kivy-sdl2/arm64-v8a__ndk_target_24/kivy" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/android_kivy_client/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/python-installs/bluenightarena/arm64-v8a" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.14 (PythonProject)" jdkType="Python SDK" />

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="KivySupportCutout">
+        <item name="android:windowNoTitle">true</item>
+        <!-- Display cutout is an area on some devices that extends into the display surface -->
+        
+    </style>
+    <string name="app_name">Blue Night Arena</string>
+    <string name="private_version">4eb3a684cd54a2f68accf3f24f6274059ce7aa61</string>
+    <string name="presplash_color">#000000</string>
+    <string name="urlScheme">kivy</string>
+</resources>

@@ -6,7 +6,11 @@ import threading
 import time
 import pygame
 import websocket
-SERVER_URL = "https://effective-parakeet-dgzj.onrender.com"
+SERVER_URL = "wss://effective-parakeet-dgzj.onrender.com"
+player_width = 36
+player_height = 36
+tank_width = 60
+tank_height = 45
 PORT = 5000
 WINDOW_WIDTH = 1100
 WINDOW_HEIGHT = 680
@@ -538,6 +542,10 @@ def draw_map_objects(screen, current_state, camera, small_font):
             wall["w"],
             wall["h"],
         )
+        wall_rects = []
+        for obj in objects:
+            if obj.get("type") in ["wall", "building", "box", "obstacle"]:
+                wall_rects.append(pygame.Rect(obj["x"], obj["y"], obj["w"], obj["h"]))
         pygame.draw.rect(screen, (3, 18, 38), rect, border_radius=4)
         pygame.draw.rect(screen, NEON_BLUE, rect, 2, border_radius=4)
     for gate in objects.get("gates", []):
@@ -560,12 +568,29 @@ def draw_map_objects(screen, current_state, camera, small_font):
         pygame.draw.rect(screen, (5, 35, 70), (x - 22, y - 22, 44, 44), border_radius=6)
         pygame.draw.rect(screen, LIGHT_BLUE, (x - 22, y - 22, 44, 44), 2, border_radius=6)
         draw_text(screen, small_font, "F", x, y - 8, WHITE, center=True)
+def move_with_wall_collision(player_rect, dx, dy, wall_rects):
+    player_rect.x += dx
+    for wall in wall_rects:
+        if player_rect.colliderect(wall):
+            if dx > 0:
+                player_rect.right = wall.left
+            elif dx < 0:
+                player_rect.left = wall.right
+    player_rect.y += dy
+    for wall in wall_rects:
+        if player_rect.colliderect(wall):
+            if dy > 0:
+                player_rect.bottom = wall.top
+            elif dy < 0:
+                player_rect.top = wall.bottom
+
+    return player_rect
 def main():
     global running
     selected_character = "poe"
     host = "127.0.0.1"
     starting_username = ""
-    print("Connecting to local server at 127.0.0.1:5000...")
+    print(f"Connecting to online server at {SERVER_URL}...")
     try:
         ws = websocket.create_connection(SERVER_URL, timeout=10)
         print("Connected to online server!")
@@ -573,6 +598,7 @@ def main():
         print("Could not connect to the online server.")
         print("Error:", error)
         return
+    threading.Thread(target=network_reader, args=(ws,), daemon=True).start()
     threading.Thread(target=network_reader, args=(ws,), daemon=True).start()
     threading.Thread(target=network_reader, args=(ws,), daemon=True).start()
     pygame.init()
