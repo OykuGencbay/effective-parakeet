@@ -66,15 +66,104 @@ MAP_OBJECTS = {
         }
     ],
 }
-
 players = {}
 player_inputs = {}
 clients = {}
 bullets = []
-
 state_lock = asyncio.Lock()
+def iter_map_objects(source, parent_key=""):
+    objects = []
 
+    if isinstance(source, dict):
+        # If this dict looks like one object, keep it
+        if (
+            "x" in source
+            and "y" in source
+            and (
+                "w" in source
+                or "width" in source
+                or "h" in source
+                or "height" in source
+            )
+        ):
+            obj = source.copy()
+            obj["_parent_key"] = parent_key
+            objects.append(obj)
 
+        # Search inside nested dict values too
+        for key, value in source.items():
+            objects.extend(iter_map_objects(value, str(key)))
+
+    elif isinstance(source, list) or isinstance(source, tuple):
+        # If it looks like [x, y, w, h], keep it
+        if len(source) >= 4 and all(isinstance(v, (int, float)) for v in source[:4]):
+            objects.append({
+                "x": source[0],
+                "y": source[1],
+                "w": source[2],
+                "h": source[3],
+                "_parent_key": parent_key,
+            })
+        else:
+            for item in source:
+                objects.extend(iter_map_objects(item, parent_key))
+
+    return objects
+
+def rects_overlap(a, b):
+    return (
+        a["x"] < b["x"] + b["w"] and
+        a["x"] + a["w"] > b["x"] and
+        a["y"] < b["y"] + b["h"] and
+        a["y"] + a["h"] > b["y"]
+    )
+def get_wall_rects(map_objects):
+    wall_rects = []
+
+    for obj in iter_map_objects(map_objects):
+        obj_type = str(obj.get("type", "")).lower()
+        parent_key = str(obj.get("_parent_key", "")).lower()
+
+        is_wall = (
+            obj_type in ["wall", "building", "obstacle", "box", "crate"]
+            or "wall" in parent_key
+            or "building" in parent_key
+            or "obstacle" in parent_key
+            or "box" in parent_key
+            or "crate" in parent_key
+        )
+
+        # If there is no type at all, assume solid object
+        if obj_type == "" and parent_key != "":
+            is_wall = True
+
+        if is_wall:
+            x = obj.get("x", 0)
+            y = obj.get("y", 0)
+            w = obj.get("w", obj.get("width", 50))
+            h = obj.get("h", obj.get("height", 50))
+
+            wall_rects.append({
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            })
+
+    return wall_rects
+def collides_with_wall(x, y, width, height, map_objects):
+    player_rect = {
+        "x": x - width // 2,
+        "y": y - height // 2,
+        "w": width,
+        "h": height,
+    }
+
+    for wall in get_wall_rects(map_objects):
+        if rects_overlap(player_rect, wall):
+            return True
+
+    return False
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
@@ -147,8 +236,8 @@ def public_state():
         "bullets": [bullet.copy() for bullet in bullets],
         "objects": MAP_OBJECTS,
     }
-
-
+print("SERVER WALL COUNT:", len(get_wall_rects(MAP_OBJECTS)))
+print("SERVER WALL RECTS:", get_wall_rects(MAP_OBJECTS)[:3])
 async def send_json(websocket, data):
     await websocket.send(json.dumps(data))
 
@@ -326,8 +415,22 @@ async def game_loop():
 
                 speed = TANK_SPEED if player["in_tank"] else PLAYER_SPEED
 
-                player["x"] = clamp(player["x"] + dx * speed * dt, 20, MAP_WIDTH - 20)
-                player["y"] = clamp(player["y"] + dy * speed * dt, 20, MAP_HEIGHT - 20)
+                old_x = player["x"]
+                old_y = player["y"]
+
+                new_x = clamp(old_x + dx * speed * dt, 20, MAP_WIDTH - 20)
+
+                if not collides_with_wall(new_x, old_y, 36, 36, MAP_OBJECTS):
+                    player["x"] = new_x
+                else:
+                    player["x"] = old_x
+
+                new_y = clamp(old_y + dy * speed * dt, 20, MAP_HEIGHT - 20)
+
+                if not collides_with_wall(player["x"], new_y, 36, 36, MAP_OBJECTS):
+                    player["y"] = new_y
+                else:
+                    player["y"] = old_y
 
                 if player["in_tank"]:
                     player["tank_x"] = player["x"]
