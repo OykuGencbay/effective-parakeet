@@ -5,7 +5,7 @@ import random
 import time
 import math
 import websockets
-
+import traceback
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 10000))
 
@@ -172,14 +172,14 @@ def distance(x1, y1, x2, y2):
     return math.hypot(x1 - x2, y1 - y2)
 
 
-def make_player(player_id, username):
+def make_player(player_id, username, character="poe"):
     spawn_x = random.randint(100, MAP_WIDTH - 100)
     spawn_y = random.randint(100, MAP_HEIGHT - 100)
 
     players[player_id] = {
         "id": player_id,
         "name": username,
-        "character": "poe",
+        "character": character,
         "x": spawn_x,
         "y": spawn_y,
         "tank_x": clamp(spawn_x + 80, 20, MAP_WIDTH - 20),
@@ -351,6 +351,7 @@ async def websocket_handler(websocket):
 
     try:
         first_message = await websocket.recv()
+        print("SERVER FIRST MESSAGE:", repr(first_message))
         data = json.loads(first_message)
 
         if data.get("type") in ["login", "register"]:
@@ -377,10 +378,26 @@ async def websocket_handler(websocket):
             except json.JSONDecodeError:
                 continue
 
+            if data.get("type") == "set_character":
+                character = data.get("character", "poe")
+
+                if character not in ["poe", "lena"]:
+                    character = "poe"
+
+                async with state_lock:
+                    if player_id in players:
+                        players[player_id]["character"] = character
+
+                print("SERVER UPDATED CHARACTER:", character)
+                continue
             await handle_message(player_id, data)
 
+
     except Exception as error:
-        print("Client error:", error)
+
+        print("SERVER CLIENT ERROR:", repr(error))
+
+        traceback.print_exc()
 
     finally:
         await remove_client(websocket)

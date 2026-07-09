@@ -6,7 +6,7 @@ import threading
 import time
 import pygame
 import websocket
-SERVER_URL = "wss://effective-parakeet-dgzj.onrender.com"
+SERVER_URL = "wss://effective-parakeet-dgzj.onrender.com/ws"
 player_width = 36
 player_height = 36
 tank_width = 60
@@ -50,23 +50,34 @@ CHARACTERS = {
         "profession": "Army Cadet",
         "likes": "Instant Noodles, Onesies",
         "dislikes": "Situations That Are Not Under Control",
-        "backstory": "In this world, everyone's direction of lives are being shaped by the household they were born in. Poe was not very fortunate about that. His mother died following the birth of his now-deceased little brother, Rick. As a result of that, he was forced to live with his gaming-addicted father. Due to his father's neglect, he was forced to devour the only person he has left and as a result of this crime, he was placed in the system. His childish heart was filled with hatred and violence, and he became fascinated with millitary paraphelenia. Now, he's seeking comfort on the frontlines of Blue Night Arena when he's off-duty.",
+        "backstory": "Poe's mother died following the birth of his now-deceased little brother, Rick. As a result of that, he was forced to live with his gaming-addicted father. Due to his father's neglect, he was forced to devour the only person he has left and as a result of this crime, he was placed in the system. His childish heart was filled with hatred and violence, and he became fascinated with millitary paraphelenia. Now, he's seeking comfort on the frontlines of Blue Night Arena when he's off-duty.",
+    },
+    "lena": {
+        "name": "Lena",
+        "age": "25",
+        "profession": "Idol",
+        "likes": "Gacha Machines",
+        "dislikes": "Tennis",
+        "backstory": "Lena's father was a gachikoi, meaning he believed he was in love with an idol. His mother, not being able to handle that left little Lena to her care. One day, Mr. Rogers got turned down by his favorite idol and made the decision to turn her daughter into the idol who's love him ALWAYS and FOREVER </3.",
     }
 }
+selected_character = "poe"
 state_lock = threading.Lock()
 send_lock = threading.Lock()
-def send_json(ws, data):
+def send_json(ws, payload):
     with send_lock:
-        try:
-            ws.send(json.dumps(data))
-        except Exception:
-            pass
+        ws.send(json.dumps(payload))
 def network_reader(ws):
     global state, my_id, running, auth_success, auth_message
     try:
         while running:
             message = ws.recv()
-            data = json.loads(message)
+            print("RAW FROM SERVER:", repr(message))
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                print("NON-JSON MESSAGE FROM SERVER:", repr(message))
+                continue
             with state_lock:
                 if data.get("type") == "auth_required":
                     auth_message = data.get("message", "Please log in or register.")
@@ -118,44 +129,51 @@ def draw_auth_box(screen, font, small_font, mode, active_field, username, passwo
     message_color = SUCCESS_GREEN if message == "Success!" else ERROR_RED
     draw_text(screen, small_font, message, WINDOW_WIDTH // 2, 410, message_color, center=True)
     draw_text(screen, small_font, "Enter: submit    Tab: switch field    L: login    R: register", WINDOW_WIDTH // 2, 465, GREY_BLUE, center=True)
-def auth_screen(screen, clock, font, small_font, sock, starting_username=""):
-    global auth_mode, running
+def auth_screen(screen, clock, font, small_font, ws, starting_username):
+    global auth_success, auth_message, auth_mode, running
+
     username = starting_username
     password = ""
     active_field = "username"
-    while running:
-        clock.tick(FPS)
-        with state_lock:
-            success = auth_success
-            message = auth_message
-        if success:
-            return True
+
+    while running and not auth_success:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
                 return False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                    return False
-                elif event.key == pygame.K_TAB:
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_TAB:
                     active_field = "password" if active_field == "username" else "username"
+
                 elif event.key == pygame.K_l:
                     auth_mode = "login"
+                    auth_message = "Login mode."
+
                 elif event.key == pygame.K_r:
                     auth_mode = "register"
+                    auth_message = "Register mode."
+
                 elif event.key == pygame.K_RETURN:
                     if username.strip() and password:
-                        send_json(sock, {
-                            "type": auth_mode,
-                            "username": username.strip(),
-                            "password": password,
-                        })
+                        auth_message = "Sending login..."
+                        print("AUTH SENT:", auth_mode, username)
+
+                        with send_lock:
+                            ws.send(json.dumps({
+                                "type": auth_mode,
+                                "username": username,
+                                "password": password,
+                            }))
+                    else:
+                        auth_message = "Enter username and password."
+
                 elif event.key == pygame.K_BACKSPACE:
                     if active_field == "username":
                         username = username[:-1]
                     else:
                         password = password[:-1]
+
                 elif event.unicode:
                     if active_field == "username":
                         if len(username) < 18 and (event.unicode.isalnum() or event.unicode == "_"):
@@ -163,6 +181,7 @@ def auth_screen(screen, clock, font, small_font, sock, starting_username=""):
                     else:
                         if len(password) < 32 and event.unicode not in "\r\n\t":
                             password += event.unicode
+
         draw_auth_box(
             screen,
             font,
@@ -171,10 +190,13 @@ def auth_screen(screen, clock, font, small_font, sock, starting_username=""):
             active_field,
             username,
             password,
-            message,
+            auth_message,
         )
+
         pygame.display.flip()
-    return False
+        clock.tick(60)
+
+    return auth_success
 def get_camera(current_state):
     if not current_state:
         return {"x": 0, "y": 0}
@@ -208,58 +230,125 @@ def draw_tank(screen, x, y, occupied=False, is_me=False):
         pygame.draw.rect(screen, POE_SKIN, (x - 6, y - 34, 12, 12))
         pygame.draw.rect(screen, WHITE, (x - 6, y - 34, 12, 12), 1)
         pygame.draw.rect(screen, POE_HAIR, (x - 6, y - 36, 12, 4))
-def draw_character_select_screen(screen, font, small_font):
-    screen.fill(BLACK)
-    panel = pygame.Rect(250, 80, 600, 520)
-    pygame.draw.rect(screen, DARK_BLUE, panel, border_radius=14)
-    pygame.draw.rect(screen, NEON_BLUE, panel, 2, border_radius=14)
-    draw_text(
-        screen,
-        font,
-        "Choose Your Character",
-        WINDOW_WIDTH // 2,
-        120,
-        LIGHT_BLUE,
-        center=True,
-    )
-    card = pygame.Rect(400, 200, 405, 350)
-    pygame.draw.rect(screen, BLACK, card, border_radius=12)
-    pygame.draw.rect(screen, LIGHT_BLUE, card, 3, border_radius=12)
-    draw_text(screen, font, "Poe", WINDOW_WIDTH // 2, 205, WHITE, center=True)
-    draw_text(screen, small_font, "Army Cadet", WINDOW_WIDTH // 2, 238, GREY_BLUE, center=True)
-    preview_x = WINDOW_WIDTH // 2
-    preview_y = 330
-    draw_poe(screen, preview_x, preview_y, is_me=True)
-    button = pygame.Rect(450, 505, 200, 42)
-    pygame.draw.rect(screen, NEON_BLUE, button, border_radius=8)
-    draw_text(screen, small_font, "ENTER: Select Poe", WINDOW_WIDTH // 2, 518, WHITE, center=True)
-    draw_text(
-        screen,
-        small_font,
-        "Esc: quit",
-        WINDOW_WIDTH // 2,
-        565,
-        GREY_BLUE,
-        center=True,
-    )
-def draw_poe(screen, x, y, is_me=False):
-    outline = WHITE if is_me else GREY_BLUE
-    pygame.draw.rect(screen, POE_BOOTS, (x - 8, y + 8, 6, 13))
-    pygame.draw.rect(screen, POE_BOOTS, (x + 2, y + 8, 6, 13))
-    pygame.draw.rect(screen, POE_UNIFORM, (x - 11, y - 10, 22, 21))
-    pygame.draw.rect(screen, POE_UNIFORM_DARK, (x - 17, y - 8, 6, 16))
-    pygame.draw.rect(screen, POE_UNIFORM_DARK, (x + 11, y - 8, 6, 16))
-    pygame.draw.rect(screen, POE_SKIN, (x - 4, y - 15, 8, 6))
-    pygame.draw.rect(screen, POE_HAIR, (x - 9, y - 31, 18, 9))
-    pygame.draw.rect(screen, POE_SKIN, (x - 8, y - 27, 16, 15))
-    pygame.draw.rect(screen, POE_HAIR, (x - 8, y - 29, 16, 5))
-    pygame.draw.rect(screen, POE_HAIR, (x - 8, y - 25, 5, 4))
-    pygame.draw.rect(screen, POE_HAIR, (x + 3, y - 25, 5, 3))
-    pygame.draw.rect(screen, BLACK, (x - 5, y - 22, 2, 2))
-    pygame.draw.rect(screen, BLACK, (x + 3, y - 22, 2, 2))
-    pygame.draw.rect(screen, TANK_DARK, (x - 11, y + 3, 22, 3))
-    pygame.draw.rect(screen, BLACK, (x - 9, y + 20, 8, 3))
-    pygame.draw.rect(screen, BLACK, (x + 1, y + 20, 8, 3))
+def draw_clean_poe(surface, x, y, scale=1.0):
+    size_w = int(70 * scale)
+    size_h = int(88 * scale)
+
+    temp = pygame.Surface((70, 88), pygame.SRCALPHA)
+
+    skin = (235, 190, 150)
+    hair = (70, 40, 25)
+    hair_dark = (45, 25, 15)
+    uniform = (55, 95, 55)
+    uniform_dark = (35, 65, 35)
+    black = (8, 10, 18)
+
+    # Shadow
+    pygame.draw.ellipse(temp, (0, 0, 0, 80), (16, 76, 38, 8))
+
+    # Shorter legs
+    pygame.draw.rect(temp, uniform_dark, (25, 56, 8, 20), border_radius=3)
+    pygame.draw.rect(temp, uniform_dark, (37, 56, 8, 20), border_radius=3)
+
+    # Slightly shorter body
+    pygame.draw.rect(temp, uniform, (20, 36, 30, 24), border_radius=6)
+
+    # Arms
+    pygame.draw.rect(temp, uniform_dark, (12, 38, 8, 21), border_radius=4)
+    pygame.draw.rect(temp, uniform_dark, (50, 38, 8, 21), border_radius=4)
+
+    # Neck
+    pygame.draw.rect(temp, skin, (31, 30, 8, 7), border_radius=3)
+
+    # Head
+    pygame.draw.circle(temp, skin, (35, 24), 15)
+
+    # Straight dark hair base
+    pygame.draw.ellipse(temp, hair_dark, (18, 8, 34, 30))
+
+    # Flatter top
+    pygame.draw.ellipse(temp, hair, (20, 6, 30, 14))
+    pygame.draw.rect(temp, hair, (23, 8, 25, 10), border_radius=5)
+
+    # Bigger bangs
+    pygame.draw.rect(temp, hair, (22, 14, 8, 16), border_radius=4)
+    pygame.draw.rect(temp, hair, (30, 13, 9, 17), border_radius=4)
+    pygame.draw.rect(temp, hair, (39, 14, 8, 15), border_radius=4)
+
+    # Side hair
+    pygame.draw.rect(temp, hair_dark, (19, 17, 7, 20), border_radius=4)
+    pygame.draw.rect(temp, hair_dark, (44, 17, 7, 20), border_radius=4)
+
+    # Redraw lower face so bangs sit on forehead, not over whole face
+    pygame.draw.circle(temp, skin, (35, 27), 11)
+
+    # Face
+    pygame.draw.circle(temp, black, (30, 25), 2)
+    pygame.draw.circle(temp, black, (40, 25), 2)
+
+    scaled = pygame.transform.smoothscale(temp, (size_w, size_h))
+    surface.blit(scaled, (int(x - size_w / 2), int(y - size_h / 2)))
+def draw_clean_lena(surface, x, y, scale=1.0):
+    size_w = int(70 * scale)
+    size_h = int(100 * scale)
+
+    temp = pygame.Surface((70, 100), pygame.SRCALPHA)
+
+    skin = (240, 195, 155)
+    blonde = (248, 218, 90)
+    blonde_dark = (195, 150, 45)
+    red_top = (195, 45, 60)
+    blue_shorts = (45, 90, 180)
+    black = (8, 10, 18)
+
+    # Shadow
+    pygame.draw.ellipse(temp, (0, 0, 0, 80), (15, 86, 40, 8))
+
+    # Legs
+    pygame.draw.rect(temp, skin, (26, 62, 7, 22), border_radius=3)
+    pygame.draw.rect(temp, skin, (37, 62, 7, 22), border_radius=3)
+
+    # Shorts
+    pygame.draw.rect(temp, blue_shorts, (21, 52, 28, 14), border_radius=4)
+
+    # Body / red tank top
+    pygame.draw.rect(temp, red_top, (21, 32, 28, 24), border_radius=6)
+
+    # Arms
+    pygame.draw.rect(temp, skin, (13, 34, 8, 24), border_radius=4)
+    pygame.draw.rect(temp, skin, (49, 34, 8, 24), border_radius=4)
+
+    # Neck
+    pygame.draw.rect(temp, skin, (31, 27, 8, 8), border_radius=3)
+
+    # Blonde hair behind head, kept to the sides so it does NOT look like a beard
+    pygame.draw.circle(temp, blonde_dark, (35, 20), 18)
+    pygame.draw.rect(temp, blonde_dark, (19, 20, 7, 35), border_radius=5)
+    pygame.draw.rect(temp, blonde_dark, (44, 20, 7, 35), border_radius=5)
+
+    # Head
+    pygame.draw.circle(temp, skin, (35, 21), 14)
+
+    # Front blonde hair / bangs
+    pygame.draw.circle(temp, blonde, (26, 10), 8)
+    pygame.draw.circle(temp, blonde, (35, 7), 9)
+    pygame.draw.circle(temp, blonde, (44, 10), 8)
+    pygame.draw.circle(temp, blonde, (29, 17), 7)
+    pygame.draw.circle(temp, blonde, (41, 17), 7)
+
+    # Side locks, not under chin
+    pygame.draw.rect(temp, blonde, (18, 17, 7, 26), border_radius=5)
+    pygame.draw.rect(temp, blonde, (45, 17, 7, 26), border_radius=5)
+
+    # Redraw face center to remove any beard-looking overlap
+    pygame.draw.circle(temp, skin, (35, 23), 11)
+
+    # Face
+    pygame.draw.circle(temp, black, (30, 22), 2)
+    pygame.draw.circle(temp, black, (40, 22), 2)
+
+    scaled = pygame.transform.smoothscale(temp, (size_w, size_h))
+    surface.blit(scaled, (int(x - size_w / 2), int(y - size_h / 2)))
 def draw_scaled_poe(screen, x, y, scale=2.0):
     base_width = 80
     base_height = 100
@@ -292,81 +381,202 @@ def draw_wrapped_text(surface, font, text, x, y, max_width, color=WHITE, line_ga
         draw_text(surface, font, line, x, y, color)
         y += font.get_height() + line_gap
     return y
+def draw_poe_small(surface, x, y, scale=0.55):
+    base_w = 120
+    base_h = 140
+
+    temp = pygame.Surface((base_w, base_h), pygame.SRCALPHA)
+    draw_poe(temp, base_w // 2, 70, is_me=False)
+
+    new_w = int(base_w * scale)
+    new_h = int(base_h * scale)
+
+    scaled = pygame.transform.smoothscale(temp, (new_w, new_h))
+    surface.blit(scaled, (int(x - new_w // 2), int(y - new_h // 2)))
+def draw_lena_small(surface, x, y, scale=0.55):
+    base_w = 120
+    base_h = 140
+
+    temp = pygame.Surface((base_w, base_h), pygame.SRCALPHA)
+    draw_lena(temp, base_w // 2, 80)
+
+    new_w = int(base_w * scale)
+    new_h = int(base_h * scale)
+
+    scaled = pygame.transform.smoothscale(temp, (new_w, new_h))
+    surface.blit(scaled, (int(x - new_w // 2), int(y - new_h // 2)))
 def draw_character_select_screen(screen, font, small_font):
-    info_font = pygame.font.SysFont("arial", 13)
     screen.fill(BLACK)
-    poe = CHARACTERS["poe"]
-    panel = pygame.Rect(200, 40, 700, 600)
-    pygame.draw.rect(screen, DARK_BLUE, panel, border_radius=14)
-    pygame.draw.rect(screen, NEON_BLUE, panel, 2, border_radius=14)
+    card_font = pygame.font.SysFont("arial", 9)
+    tiny_font = pygame.font.SysFont("arial", 8)
+
+    character_keys = ["poe", "lena"]
+    current_key = selected_character
+    character = CHARACTERS[current_key]
+
+    # Main panel
+    panel = pygame.Rect(180, 35, 740, 610)
+    pygame.draw.rect(screen, DARK_BLUE, panel, border_radius=18)
+    pygame.draw.rect(screen, NEON_BLUE, panel, 2, border_radius=18)
+
     draw_text(
         screen,
         font,
         "Choose Your Character",
         WINDOW_WIDTH // 2,
-        75,
+        70,
         LIGHT_BLUE,
         center=True,
     )
-    card = pygame.Rect(290, 120, 520, 455)
-    pygame.draw.rect(screen, BLACK, card, border_radius=12)
-    pygame.draw.rect(screen, LIGHT_BLUE, card, 3, border_radius=12)
-    draw_text(screen, font, poe["name"], WINDOW_WIDTH // 2, 145, WHITE, center=True)
-    preview_x = WINDOW_WIDTH // 2
-    preview_y = 230
-    draw_scaled_poe(screen, preview_x, preview_y + 5, scale=2.0)
-    info_x = card.x + 28
-    info_y = 315
-    max_width = card.width - 56
-    draw_text(screen, info_font, f"Age: {poe['age']}", info_x, info_y, GREY_BLUE)
-    info_y += 19
-    draw_text(screen, info_font, f"Profession: {poe['profession']}", info_x, info_y, GREY_BLUE)
-    info_y += 19
-    draw_text(screen, info_font, f"Likes: {poe['likes']}", info_x, info_y, GREY_BLUE)
-    info_y += 19
+
+    # Big slideshow card
+    card = pygame.Rect(310, 115, 480, 450)
+    pygame.draw.rect(screen, BLACK, card, border_radius=16)
+    pygame.draw.rect(screen, LIGHT_BLUE, card, 3, border_radius=16)
+
+    # Character name
+    draw_text(
+        screen,
+        font,
+        character.get("name", current_key.title()),
+        card.centerx,
+        card.y + 28,
+        WHITE,
+        center=True,
+    )
+
+    # Character preview
+    preview_x = card.centerx
+    preview_y = card.y + 145
+
+    if current_key == "lena":
+        draw_clean_lena(screen, preview_x, preview_y, scale=1.55)
+    else:
+        draw_clean_poe(screen, preview_x, preview_y, scale=1.55)
+
+    # Info section
+    info_x = card.x + 35
+    info_y = card.y + 245
+    max_width = card.width - 70
+
+    draw_text(
+        screen,
+        card_font,
+        f"Age: {character.get('age', 'Unknown')}",
+        info_x,
+        info_y,
+        GREY_BLUE,
+    )
+    info_y += 24
+
+    draw_text(
+        screen,
+        card_font,
+        f"Profession: {character.get('profession', 'Unknown')}",
+        info_x,
+        info_y,
+        GREY_BLUE,
+    )
+    info_y += 24
+
+    draw_text(
+        screen,
+        card_font,
+        f"Likes: {character.get('likes', 'Unknown')}",
+        info_x,
+        info_y,
+        GREY_BLUE,
+    )
+    info_y += 24
+
     info_y = draw_wrapped_text(
         screen,
-        info_font,
-        f"Dislikes: {poe['dislikes']}",
+        card_font,
+        f"Dislikes: {character.get('dislikes', 'Unknown')}",
         info_x,
         info_y,
         max_width,
         GREY_BLUE,
-        line_gap=1,
         max_lines=2,
     )
-    info_y += 10
-    draw_text(screen, info_font, "Backstory:", info_x, info_y, LIGHT_BLUE)
-    info_y += 19
+
+    info_y += 12
+
+    draw_text(screen, card_font, "Backstory:", info_x, info_y, LIGHT_BLUE)
+    info_y += 22
+
     draw_wrapped_text(
         screen,
-        info_font,
-        poe["backstory"],
+        card_font,
+        character.get("backstory", ""),
         info_x,
         info_y,
         max_width,
         WHITE,
-        line_gap=1,
-        max_lines=10,
+        max_lines=5,
     )
-    button = pygame.Rect(450, 590, 200, 38)
-    pygame.draw.rect(screen, NEON_BLUE, button, border_radius=8)
+
+    # Slideshow arrows
+    left_button = pygame.Rect(225, 300, 55, 55)
+    right_button = pygame.Rect(820, 300, 55, 55)
+
+    pygame.draw.rect(screen, BLACK, left_button, border_radius=12)
+    pygame.draw.rect(screen, NEON_BLUE, left_button, 2, border_radius=12)
+    draw_text(screen, font, "<", left_button.centerx, left_button.y + 13, WHITE, center=True)
+
+    pygame.draw.rect(screen, BLACK, right_button, border_radius=12)
+    pygame.draw.rect(screen, NEON_BLUE, right_button, 2, border_radius=12)
+    draw_text(screen, font, ">", right_button.centerx, right_button.y + 13, WHITE, center=True)
+
+    # Dots indicator
+    dot_y = 585
+    for index, key in enumerate(character_keys):
+        dot_x = WINDOW_WIDTH // 2 - 15 + index * 30
+        color = LIGHT_BLUE if key == current_key else GREY_BLUE
+        pygame.draw.circle(screen, color, (dot_x, dot_y), 6)
+
+    # Select button
+    select_button = pygame.Rect(440, 605, 220, 38)
+    pygame.draw.rect(screen, NEON_BLUE, select_button, border_radius=8)
+
     draw_text(
         screen,
         small_font,
-        "ENTER: Select Poe",
+        f"ENTER: Select {character.get('name', current_key.title())}",
         WINDOW_WIDTH // 2,
-        601,
+        select_button.y + 10,
         WHITE,
         center=True,
     )
+
+    # Help text
+    draw_text(
+        screen,
+        small_font,
+        "Use Left/Right arrows or click the arrows to switch",
+        WINDOW_WIDTH // 2,
+        655,
+        GREY_BLUE,
+        center=True,
+    )
+
+    return left_button, right_button, select_button
 def draw_players(screen, current_state, camera, small_font):
     for player in current_state["players"].values():
+        if isinstance(camera, dict):
+            camera_x = camera.get("x", 0)
+            camera_y = camera.get("y", 0)
+        else:
+            camera_x, camera_y = camera
         is_me = player["id"] == my_id
         player_x = int(player["x"] - camera["x"])
         player_y = int(player["y"] - camera["y"])
         tank_x = int(player["tank_x"] - camera["x"])
         tank_y = int(player["tank_y"] - camera["y"])
+        world_x = player.get("x", player.get("tank_x", 0))
+        world_y = player.get("y", player.get("tank_y", 0))
+        screen_x = int(world_x - camera_x)
+        screen_y = int(world_y - camera_y)
         if player["in_tank"]:
             draw_tank(screen, tank_x, tank_y, occupied=True, is_me=is_me)
             if player.get("invulnerable"):
@@ -391,7 +601,11 @@ def draw_players(screen, current_state, camera, small_font):
             )
         else:
             draw_tank(screen, tank_x, tank_y, occupied=False, is_me=is_me)
-            draw_poe(screen, player_x, player_y, is_me=is_me)
+            character = player.get("character", "poe")
+            if character == "lena":
+                draw_clean_lena(screen, screen_x, screen_y, scale=0.75)
+            else:
+                draw_clean_poe(screen, screen_x, screen_y, scale=0.75)
             if player.get("invulnerable"):
                 pygame.draw.circle(screen, LIGHT_BLUE, (player_x, player_y - 5), 32, 2)
             draw_text(
@@ -493,29 +707,72 @@ def world_mouse_position(mouse_pos, camera):
         "x": mouse_x + camera["x"],
         "y": mouse_y + camera["y"],
     }
-def character_select_screen(screen, clock, font, small_font, sock):
-    global selected_character, running
-    selected_character = "poe"
-    while running:
-        clock.tick(FPS)
+def character_select_screen(screen, clock, font, small_font, ws):
+    global selected_character
+
+    character_keys = ["poe", "lena"]
+
+    while True:
+        left_button, right_button, select_button = draw_character_select_screen(
+            screen,
+            font,
+            small_font,
+        )
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
                 return False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                    return False
-                elif event.key == pygame.K_RETURN:
-                    selected_character = "poe"
-                    send_json(sock, {
-                        "type": "select_character",
-                        "character": selected_character,
-                    })
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if left_button.collidepoint(event.pos):
+                    current_index = character_keys.index(selected_character)
+                    selected_character = character_keys[(current_index - 1) % len(character_keys)]
+                    print("SELECTED CHARACTER CHANGED TO:", selected_character)
+
+                elif right_button.collidepoint(event.pos):
+                    current_index = character_keys.index(selected_character)
+                    selected_character = character_keys[(current_index + 1) % len(character_keys)]
+                    print("SELECTED CHARACTER CHANGED TO:", selected_character)
+
+                elif select_button.collidepoint(event.pos):
                     return True
-        draw_character_select_screen(screen, font, small_font)
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    return True
+
+                elif event.key == pygame.K_LEFT:
+                    current_index = character_keys.index(selected_character)
+                    selected_character = character_keys[(current_index - 1) % len(character_keys)]
+                    print("SELECTED CHARACTER CHANGED TO:", selected_character)
+
+                elif event.key == pygame.K_RIGHT:
+                    current_index = character_keys.index(selected_character)
+                    selected_character = character_keys[(current_index + 1) % len(character_keys)]
+                    print("SELECTED CHARACTER CHANGED TO:", selected_character)
+
+                elif event.key == pygame.K_ESCAPE:
+                    return False
+
         pygame.display.flip()
-    return False
+        clock.tick(60)
+def iter_map_objects(source):
+    objects = []
+
+    if isinstance(source, dict):
+        # If this dict itself looks like one map object
+        if "x" in source and "y" in source:
+            objects.append(source)
+
+        # Search inside dictionary values
+        for value in source.values():
+            objects.extend(iter_map_objects(value))
+
+    elif isinstance(source, list) or isinstance(source, tuple):
+        for item in source:
+            objects.extend(iter_map_objects(item))
+
+    return objects
 def draw_map_objects(screen, current_state, camera, small_font):
     objects = current_state.get("objects", {})
     for pad in objects.get("speed_pads", []):
@@ -543,7 +800,7 @@ def draw_map_objects(screen, current_state, camera, small_font):
             wall["h"],
         )
         wall_rects = []
-        for obj in objects:
+        for obj in iter_map_objects(current_state.get("objects", {})):
             if obj.get("type") in ["wall", "building", "box", "obstacle"]:
                 wall_rects.append(pygame.Rect(obj["x"], obj["y"], obj["w"], obj["h"]))
         pygame.draw.rect(screen, (3, 18, 38), rect, border_radius=4)
@@ -587,31 +844,34 @@ def move_with_wall_collision(player_rect, dx, dy, wall_rects):
     return player_rect
 def main():
     global running
-    selected_character = "poe"
     host = "127.0.0.1"
     starting_username = ""
     print(f"Connecting to online server at {SERVER_URL}...")
     try:
         ws = websocket.create_connection(SERVER_URL, timeout=10)
+        ws.settimeout(None)
         print("Connected to online server!")
     except Exception as error:
         print("Could not connect to the online server.")
         print("Error:", error)
         return
     threading.Thread(target=network_reader, args=(ws,), daemon=True).start()
-    threading.Thread(target=network_reader, args=(ws,), daemon=True).start()
-    threading.Thread(target=network_reader, args=(ws,), daemon=True).start()
+
     pygame.init()
     pygame.display.set_caption("Blue Night Arena")
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 24, bold=True)
     small_font = pygame.font.SysFont("arial", 16)
+
+    # Choose Poe/Lena BEFORE login/register is sent
     if not auth_screen(screen, clock, font, small_font, ws, starting_username):
         try:
             ws.close()
         except OSError:
             pass
+        pygame.quit()
+        return
     if not character_select_screen(screen, clock, font, small_font, ws):
         try:
             ws.close()
@@ -619,6 +879,12 @@ def main():
             pass
         pygame.quit()
         return
+    print("SELECTED CHARACTER SENT:", selected_character)
+
+    send_json(ws, {
+        "type": "set_character",
+        "character": selected_character,
+    })
     keys = {
         "up": False,
         "down": False,
